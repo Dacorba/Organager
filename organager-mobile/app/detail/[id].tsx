@@ -1,6 +1,6 @@
 import { analyzePoint } from "@/services/analyzePoint";
 import { useAppStore } from "@/store/useAppStore";
-import { ItemCategory, ItemState, Priority, RecurrenceType, WorkspaceId } from "@/types";
+import { Item, ItemCategory, ItemState, Priority, RecurrenceType, WorkspaceId } from "@/types";
 import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
@@ -44,6 +44,22 @@ function isValidDateISO(value: string) {
 
 function isValidTime(value: string) {
   return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+
+function previewFromItem(item: Item, state: ItemState): Preview {
+  return {
+    title: item.title,
+    description: item.description,
+    category: item.category,
+    state: state === "Não feito" ? "Novo" : state,
+    priority: item.priority ?? "Baixa",
+    containerId: item.containerId,
+    person: item.person,
+    dateText: item.dateText,
+    timeText: item.timeText,
+    dateISO: item.dateISO,
+    recurrence: item.recurrence ?? "none",
+  };
 }
 
 export default function DetailScreen() {
@@ -92,12 +108,6 @@ export default function DetailScreen() {
     [allContainers, containerId]
   );
 
-  const [text, setText] = useState(item?.description ?? "");
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const [listening, setListening] = useState(false);
-
   const occurrenceDate =
     typeof params.occurrenceDate === "string" ? params.occurrenceDate : undefined;
   const isRecurringItem = (item?.recurrence ?? "none") !== "none";
@@ -106,7 +116,24 @@ export default function DetailScreen() {
       ? item.occurrenceStates?.[occurrenceDate] ?? item.state
       : item?.state;
 
+  const [text, setText] = useState(item?.description ?? "");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [preview, setPreview] = useState<Preview | null>(() =>
+    item ? previewFromItem(item, currentState ?? item.state) : null
+  );
+  const [listening, setListening] = useState(false);
+
   useEffect(() => {
+    if (!isNew && item) {
+      setText(item.description);
+      setPreview(previewFromItem(item, currentState ?? item.state));
+    }
+  }, [currentState, isNew, item]);
+
+  useEffect(() => {
+    if (!isNew) return;
+
     const resultSub = ExpoSpeechRecognitionModule.addListener("result", (event) => {
       const transcript = event.results?.[0]?.transcript ?? "";
       if (transcript) setText(transcript);
@@ -126,7 +153,7 @@ export default function DetailScreen() {
       endSub.remove();
       errorSub.remove();
     };
-  }, []);
+  }, [isNew]);
 
   if (!workspace) {
     return (
@@ -231,13 +258,16 @@ export default function DetailScreen() {
       return;
     }
 
+    const isOccurrenceEdit = Boolean(
+      !isNew && item && isRecurringItem && occurrenceDate
+    );
     const payload = {
       workspaceId: workspaceId as WorkspaceId,
       containerId: preview.containerId,
       title: preview.title.trim(),
       description: preview.description,
       category: preview.category,
-      state: preview.state,
+      state: isOccurrenceEdit && item ? item.state : preview.state,
       priority: preview.priority,
       person: preview.person,
       dateText: preview.dateText,
@@ -250,12 +280,21 @@ export default function DetailScreen() {
       addAnalyzedPoint(payload);
     } else if (item) {
       updateAnalyzedPoint(item.id, payload);
+
+      if (isOccurrenceEdit && currentState !== preview.state) {
+        updateItemState(item.id, preview.state, occurrenceDate);
+      }
     }
 
     setText("");
     setPreview(null);
     setMessage(isNew ? "Guardado na lista ativa." : "Alterações guardadas.");
-    router.replace(`/workspace/${workspaceId}`);
+
+    if (isNew) {
+      router.replace(`/workspace/${workspaceId}`);
+    } else {
+      router.back();
+    }
   }
 
   function deleteCurrentItem() {
@@ -305,112 +344,56 @@ export default function DetailScreen() {
         {container ? ` · ${container.name}` : ""}
       </Text>
 
-      {!isNew && item ? (
-        <View
-          style={{
-            borderWidth: 1,
-            borderColor: "#e2e8f0",
-            borderRadius: 18,
-            padding: 16,
-            marginBottom: 16,
-            backgroundColor: "#fff",
-            gap: 10,
-          }}
-        >
-          <Text style={{ fontSize: 18, fontWeight: "900" }}>
-            Estado{occurrenceDate ? ` · ${occurrenceDate}` : ""}
-          </Text>
+      {isNew ? (
+        <>
+          <TextInput
+            placeholder="Escreve aqui a tarefa, nota, reunião, ideia..."
+            value={text}
+            onChangeText={setText}
+            multiline
+            style={{
+              borderWidth: 1,
+              borderColor: "#ccc",
+              borderRadius: 14,
+              padding: 14,
+              minHeight: 140,
+              marginBottom: 12,
+              textAlignVertical: "top",
+            }}
+          />
 
-          {isRecurringItem && !occurrenceDate ? (
-            <Text style={{ color: "#64748b", lineHeight: 20 }}>
-              Esta é uma série recorrente. Abre uma data no calendário para alterar
-              apenas essa ocorrência.
+          <Pressable
+            onPress={handleAnalyze}
+            disabled={loading}
+            style={{
+              backgroundColor: loading ? "#777" : "#000",
+              padding: 16,
+              borderRadius: 14,
+              alignItems: "center",
+              marginBottom: 12,
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "bold" }}>
+              {loading ? "A analisar..." : "Analisar com AI"}
             </Text>
-          ) : (
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              {workspace.states.map((stateOption) => {
-                const active = currentState === stateOption;
+          </Pressable>
 
-                return (
-                  <Pressable
-                    key={stateOption}
-                    onPress={() => {
-                      updateItemState(item.id, stateOption, occurrenceDate);
-                      setMessage(
-                        occurrenceDate
-                          ? `Estado da ocorrência de ${occurrenceDate} atualizado.`
-                          : "Estado atualizado."
-                      );
-                    }}
-                    style={{
-                      backgroundColor: active ? "#0f172a" : "#e5e7eb",
-                      borderRadius: 999,
-                      paddingHorizontal: 14,
-                      paddingVertical: 10,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: active ? "#fff" : "#111827",
-                        fontWeight: "800",
-                      }}
-                    >
-                      {stateOption}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          )}
-        </View>
+          <Pressable
+            onPress={startListening}
+            style={{
+              backgroundColor: listening ? "#2563eb" : "#374151",
+              padding: 16,
+              borderRadius: 14,
+              alignItems: "center",
+              marginBottom: 12,
+            }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "bold" }}>
+              {listening ? "🎤 A ouvir..." : "🎤 Falar"}
+            </Text>
+          </Pressable>
+        </>
       ) : null}
-
-      <TextInput
-        placeholder="Escreve aqui a tarefa, nota, reunião, ideia..."
-        value={text}
-        onChangeText={setText}
-        multiline
-        style={{
-          borderWidth: 1,
-          borderColor: "#ccc",
-          borderRadius: 14,
-          padding: 14,
-          minHeight: 140,
-          marginBottom: 12,
-          textAlignVertical: "top",
-        }}
-      />
-
-      <Pressable
-        onPress={handleAnalyze}
-        disabled={loading}
-        style={{
-          backgroundColor: loading ? "#777" : "#000",
-          padding: 16,
-          borderRadius: 14,
-          alignItems: "center",
-          marginBottom: 12,
-        }}
-      >
-        <Text style={{ color: "#fff", fontWeight: "bold" }}>
-          {loading ? "A analisar..." : "Analisar com AI"}
-        </Text>
-      </Pressable>
-
-      <Pressable
-        onPress={startListening}
-        style={{
-          backgroundColor: listening ? "#2563eb" : "#374151",
-          padding: 16,
-          borderRadius: 14,
-          alignItems: "center",
-          marginBottom: 12,
-        }}
-      >
-        <Text style={{ color: "#fff", fontWeight: "bold" }}>
-          {listening ? "🎤 A ouvir..." : "🎤 Falar"}
-        </Text>
-      </Pressable>
 
       {message ? (
         <Text style={{ color: "red", marginBottom: 12 }}>{message}</Text>
@@ -429,7 +412,7 @@ export default function DetailScreen() {
           }}
         >
           <Text style={{ fontSize: 20, fontWeight: "900" }}>
-            Confirmar antes de guardar
+            {isNew ? "Confirmar antes de guardar" : "Editar tarefa"}
           </Text>
 
           <Text>Título</Text>
@@ -438,6 +421,59 @@ export default function DetailScreen() {
             onChangeText={(v) => setPreview({ ...preview, title: v })}
             style={{ borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 10 }}
           />
+
+          <Text>Descrição</Text>
+          <TextInput
+            value={preview.description}
+            onChangeText={(v) => setPreview({ ...preview, description: v })}
+            multiline
+            style={{
+              borderWidth: 1,
+              borderColor: "#ddd",
+              borderRadius: 10,
+              padding: 10,
+              minHeight: 100,
+              textAlignVertical: "top",
+            }}
+          />
+
+          <Text>Estado{occurrenceDate ? ` · ${occurrenceDate}` : ""}</Text>
+          {!isNew && isRecurringItem && !occurrenceDate ? (
+            <Text style={{ color: "#64748b", lineHeight: 20 }}>
+              Abre uma data no calendário para alterar o estado de uma ocorrência
+              recorrente.
+            </Text>
+          ) : (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {workspace.states
+                .filter((stateOption) => stateOption !== "Não feito")
+                .map((stateOption) => {
+                  const active = preview.state === stateOption;
+
+                  return (
+                    <Pressable
+                      key={stateOption}
+                      onPress={() => setPreview({ ...preview, state: stateOption })}
+                      style={{
+                        backgroundColor: active ? "#0f172a" : "#e5e7eb",
+                        borderRadius: 999,
+                        paddingHorizontal: 14,
+                        paddingVertical: 10,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: active ? "#fff" : "#111827",
+                          fontWeight: "800",
+                        }}
+                      >
+                        {stateOption}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+            </View>
+          )}
 
           <Text>Data</Text>
           <TextInput
@@ -552,20 +588,26 @@ export default function DetailScreen() {
               marginTop: 8,
             }}
           >
-            <Text style={{ color: "#fff", fontWeight: "900" }}>Guardar</Text>
+            <Text style={{ color: "#fff", fontWeight: "900" }}>
+              {isNew ? "Guardar" : "Confirmar"}
+            </Text>
           </Pressable>
         </View>
       ) : null}
 
-      <Text style={{ fontWeight: "bold", marginBottom: 6 }}>
-        Containers disponíveis:
-      </Text>
+      {isNew && !preview ? (
+        <>
+          <Text style={{ fontWeight: "bold", marginBottom: 6 }}>
+            Projetos disponíveis:
+          </Text>
 
-      {containers.map((c) => (
-        <Text key={c.id} style={{ marginBottom: 4 }}>
-          • {c.name}
-        </Text>
-      ))}
+          {containers.map((c) => (
+            <Text key={c.id} style={{ marginBottom: 4 }}>
+              • {c.name}
+            </Text>
+          ))}
+        </>
+      ) : null}
       {!isNew && item ? (
         <Pressable
           onPress={deleteCurrentItem}

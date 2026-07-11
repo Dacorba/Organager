@@ -61,9 +61,6 @@ export default function ReportScreen() {
 Feito hoje:
 ${formatLines(titlesForState("Feito"))}
 
-Não feito:
-${formatLines(titlesForState("Não feito"))}
-
 Parcial:
 ${formatLines(titlesForState("Parcial"))}
 

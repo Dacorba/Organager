@@ -31,7 +31,7 @@ const workspaceConfigs: WorkspaceConfig[] = [
       "Issue",
       "Waiting",
     ],
-    states: ["Novo", "Em progresso", "Feito", "Não feito", "Parcial", "Adiado", "Bloqueado"],
+    states: ["Novo", "Em progresso", "Feito", "Parcial", "Adiado", "Bloqueado"],
   },
   {
     id: "personal",
@@ -74,6 +74,7 @@ type AppStore = {
   items: Item[];
   
   addContainer: (workspaceId: WorkspaceId, name: string) => void;
+  renameContainer: (containerId: string, name: string) => void;
   removeContainer: (containerId: string) => void;
   removeItem: (itemId: string) => void;
 
@@ -152,11 +153,28 @@ export const useAppStore = create<AppStore>()(
       ],
     })),
 
-  removeContainer: (containerId) =>
+  renameContainer: (containerId, name) =>
     set((state) => ({
-      containers: state.containers.filter((c) => c.id !== containerId),
-      items: state.items.filter((i) => i.containerId !== containerId),
+      containers: state.containers.map((container) =>
+        container.id === containerId ? { ...container, name } : container
+      ),
     })),
+
+  removeContainer: (containerId) =>
+    set((state) => {
+      const container = state.containers.find((entry) => entry.id === containerId);
+      if (!container || container.id.startsWith("unassigned-")) return state;
+
+      const unassignedId = `unassigned-${container.workspaceId}`;
+      return {
+        containers: state.containers.filter((entry) => entry.id !== containerId),
+        items: state.items.map((item) =>
+          item.containerId === containerId
+            ? { ...item, containerId: unassignedId }
+            : item
+        ),
+      };
+    }),
 
     removeItem: (itemId) =>
       set((state) => ({
@@ -303,7 +321,7 @@ export const useAppStore = create<AppStore>()(
     const excluded =
       workspaceId === "personal"
         ? ["Feito", "Arquivado", "Backlog"]
-        : ["Feito", "Não feito"];
+        : ["Feito"];
 
     return get().items.filter(
       (item) => item.workspaceId === workspaceId && !excluded.includes(item.state)
@@ -319,7 +337,7 @@ export const useAppStore = create<AppStore>()(
     get().items.filter(
       (item) =>
         item.workspaceId === workspaceId &&
-        ["Feito", "Arquivado", "Não feito"].includes(item.state)
+        ["Feito", "Arquivado"].includes(item.state)
     ),
     }),
     {

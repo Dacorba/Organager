@@ -72,16 +72,18 @@ function recurrenceLabel(recurrence?: RecurrenceType) {
 
 function itemOccursOnDate(item: Item, dateISO: string) {
   const recurrence = item.recurrence ?? "none";
+  const today = todayISO();
 
-  // Tarefa aberta/flutuante:
-  // sem data + sem recorrência aparece todos os dias enquanto estiver ativa.
-  // Não é uma tarefa diária. É uma tarefa única ainda por fazer.
+  // Uma tarefa aberta aparece apenas hoje. À meia-noite, continua pendente
+  // e passa automaticamente para o novo dia, sem preencher datas futuras.
   if (!item.dateISO) {
-    return recurrence === "none";
+    return recurrence === "none" && dateISO === today;
   }
 
-  // Tarefa normal com data específica
+  // Tarefas pontuais atrasadas também transitam para hoje. Tarefas futuras
+  // permanecem exclusivamente na data marcada.
   if (recurrence === "none") {
+    if (item.dateISO < today) return dateISO === today;
     return item.dateISO === dateISO;
   }
 
@@ -120,6 +122,11 @@ function itemOccursOnDate(item: Item, dateISO: string) {
   }
 
   return false;
+}
+
+function isOccurrenceFinished(item: Item, dateISO: string) {
+  const state = item.occurrenceStates?.[dateISO];
+  return state === "Feito" || state === "Arquivado";
 }
 
 function SelectPill({
@@ -235,7 +242,7 @@ function ItemCard({
       </View>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
         <Badge label={item.category} />
-        <Badge label={item.state} />
+        <Badge label={item.state === "Não feito" ? "Novo" : item.state} />
         <Badge label={item.dateISO ? item.dateText ?? item.dateISO : "Aberta"} />
         <Badge label={recurrenceLabel(item.recurrence)} />
         <Badge label={item.person ? `👤 ${item.person}` : undefined} />
@@ -330,7 +337,7 @@ export default function ActiveScreen() {
     const excluded =
       workspaceId === "personal"
         ? ["Feito", "Arquivado", "Backlog"]
-        : ["Feito", "Não feito"];
+        : ["Feito"];
 
     return items.filter(
       (item) =>
@@ -380,7 +387,11 @@ export default function ActiveScreen() {
 
   const selectedDateItems = useMemo(() => {
     return filteredByContainer
-      .filter((item) => itemOccursOnDate(item, selectedDate))
+      .filter(
+        (item) =>
+          itemOccursOnDate(item, selectedDate) &&
+          !isOccurrenceFinished(item, selectedDate)
+      )
       .sort((a, b) =>
         String(a.timeText ?? "99:99").localeCompare(
           String(b.timeText ?? "99:99")
@@ -395,8 +406,8 @@ export default function ActiveScreen() {
       if (!date) return;
 
       const key = formatDateISO(date);
-      const dayItems = filteredByContainer.filter((item) =>
-        itemOccursOnDate(item, key)
+      const dayItems = filteredByContainer.filter(
+        (item) => itemOccursOnDate(item, key) && !isOccurrenceFinished(item, key)
       );
 
       if (dayItems.length > 0) {

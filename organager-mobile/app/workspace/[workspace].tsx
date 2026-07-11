@@ -1,6 +1,7 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
 import {
+  Alert,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -34,8 +35,12 @@ export default function WorkspaceScreen() {
   const workspaces = useAppStore((s) => s.workspaces);
   const allContainers = useAppStore((s) => s.containers);
   const addContainer = useAppStore((s) => s.addContainer);
+  const renameContainer = useAppStore((s) => s.renameContainer);
+  const removeContainer = useAppStore((s) => s.removeContainer);
 
   const [newName, setNewName] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
 
   const currentWorkspace = useMemo(
     () => workspaces.find((w) => w.id === workspaceId),
@@ -48,6 +53,30 @@ export default function WorkspaceScreen() {
   );
 
   if (!currentWorkspace) return null;
+
+  function saveContainerName() {
+    const name = editingName.trim();
+    if (!editingId || !name) return;
+
+    renameContainer(editingId, name);
+    setEditingId(null);
+    setEditingName("");
+  }
+
+  function confirmRemoveContainer(containerId: string, containerName: string) {
+    Alert.alert(
+      `Eliminar ${workspaceId === "rovisys" ? "projeto" : "área"}?`,
+      `“${containerName}” será eliminado. As tarefas existentes passam para “Sem projeto”.`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Eliminar",
+          style: "destructive",
+          onPress: () => removeContainer(containerId),
+        },
+      ]
+    );
+  }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#f8fafc" }}>
@@ -183,26 +212,108 @@ export default function WorkspaceScreen() {
         </Card>
 
         <View style={{ gap: 12 }}>
-          {containers.map((container) => (
-            <Pressable
-              key={container.id}
-              onPress={() =>
-                router.push({
-                  pathname: "/active/[actworkspace]",
-                  params: {
-                    actworkspace: workspaceId,
-                    containerId: container.id,
-                  },
-                })
-              }
-            >
-              <Card>
-                <Text style={{ fontSize: 18, fontWeight: "700", color: "#0f172a" }}>
-                  {container.name}
-                </Text>
+          {containers.map((container) => {
+            const isEditing = editingId === container.id;
+            const isUnassigned = container.id.startsWith("unassigned-");
+
+            return (
+              <Card key={container.id}>
+                {isEditing ? (
+                  <View style={{ gap: 10 }}>
+                    <TextInput
+                      value={editingName}
+                      onChangeText={setEditingName}
+                      autoFocus
+                      style={{
+                        borderWidth: 1,
+                        borderColor: "#cbd5e1",
+                        borderRadius: 12,
+                        paddingHorizontal: 12,
+                        paddingVertical: 10,
+                      }}
+                    />
+                    <View style={{ flexDirection: "row", gap: 8 }}>
+                      <Pressable
+                        onPress={saveContainerName}
+                        style={{
+                          backgroundColor: "#16a34a",
+                          borderRadius: 12,
+                          paddingHorizontal: 14,
+                          paddingVertical: 10,
+                        }}
+                      >
+                        <Text style={{ color: "#fff", fontWeight: "700" }}>Guardar</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => {
+                          setEditingId(null);
+                          setEditingName("");
+                        }}
+                        style={{
+                          backgroundColor: "#e2e8f0",
+                          borderRadius: 12,
+                          paddingHorizontal: 14,
+                          paddingVertical: 10,
+                        }}
+                      >
+                        <Text style={{ color: "#334155", fontWeight: "700" }}>Cancelar</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={{ gap: 12 }}>
+                    <Pressable
+                      onPress={() =>
+                        router.push({
+                          pathname: "/active/[actworkspace]",
+                          params: {
+                            actworkspace: workspaceId,
+                            containerId: container.id,
+                          },
+                        })
+                      }
+                    >
+                      <Text style={{ fontSize: 18, fontWeight: "700", color: "#0f172a" }}>
+                        {container.name}
+                      </Text>
+                    </Pressable>
+
+                    {!isUnassigned ? (
+                      <View style={{ flexDirection: "row", gap: 8 }}>
+                        <Pressable
+                          onPress={() => {
+                            setEditingId(container.id);
+                            setEditingName(container.name);
+                          }}
+                          style={{
+                            backgroundColor: "#e2e8f0",
+                            borderRadius: 12,
+                            paddingHorizontal: 12,
+                            paddingVertical: 8,
+                          }}
+                        >
+                          <Text style={{ color: "#334155", fontWeight: "700" }}>Editar</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() =>
+                            confirmRemoveContainer(container.id, container.name)
+                          }
+                          style={{
+                            backgroundColor: "#fee2e2",
+                            borderRadius: 12,
+                            paddingHorizontal: 12,
+                            paddingVertical: 8,
+                          }}
+                        >
+                          <Text style={{ color: "#b91c1c", fontWeight: "700" }}>Eliminar</Text>
+                        </Pressable>
+                      </View>
+                    ) : null}
+                  </View>
+                )}
               </Card>
-            </Pressable>
-          ))}
+            );
+          })}
         </View>
       </ScrollView>
     </SafeAreaView>
