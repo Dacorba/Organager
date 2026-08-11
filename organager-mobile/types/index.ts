@@ -61,6 +61,7 @@ export type ContainerItem = {
   workspaceId: WorkspaceId;
   type: ContainerType;
   name: string;
+  order?: number;
 };
 
 export type Item = {
@@ -74,6 +75,7 @@ export type Item = {
   createdAt: string;
   dueDate?: string;
   priority?: Priority;
+  priorityOrder?: number;
   person?: string;
   dateText?: string;
   timeText?: string;

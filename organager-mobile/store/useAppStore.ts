@@ -12,6 +12,14 @@ import {
   WorkspaceId,
 } from "../types";
 import { classifyItem } from "../utils/classifier";
+import { DEFAULT_API_BASE_URL } from "../services/backend";
+import { compareActiveItems, movePriorityId } from "../utils/priority";
+import {
+  isUnassignedContainer,
+  moveContainerId,
+  sortContainers,
+} from "../utils/containers";
+import { isItemVisibleInActiveList } from "../utils/calendar";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -72,10 +80,14 @@ type AppStore = {
   workspaces: WorkspaceConfig[];
   containers: ContainerItem[];
   items: Item[];
+  apiBaseUrl: string;
+  setApiBaseUrl: (apiBaseUrl: string) => void;
+  restoreBackupData: (containers: ContainerItem[], items: Item[]) => void;
   
   addContainer: (workspaceId: WorkspaceId, name: string) => void;
   renameContainer: (containerId: string, name: string) => void;
   removeContainer: (containerId: string) => void;
+  moveContainer: (containerId: string, direction: "up" | "down") => void;
   removeItem: (itemId: string) => void;
 
   addPoint: (workspaceId: WorkspaceId, containerId: string, text: string) => void;
@@ -93,19 +105,28 @@ type AppStore = {
   getBacklogItemsGlobal: (workspaceId: WorkspaceId) => Item[];
   getHistoryItemsGlobal: (workspaceId: WorkspaceId) => Item[];
   togglePriority: (itemId: string) => void;
+  movePriorityItem: (
+    itemId: string,
+    direction: "up" | "down",
+    visibleOrderedIds: string[]
+  ) => void;
 };
 
 export const useAppStore = create<AppStore>()(
   persist(
     (set, get) => ({
   workspaces: workspaceConfigs,
+  apiBaseUrl: DEFAULT_API_BASE_URL,
+
+  setApiBaseUrl: (apiBaseUrl) => set({ apiBaseUrl }),
+  restoreBackupData: (containers, items) => set({ containers, items }),
 
   containers: [
-    { id: "proj-1", workspaceId: "rovisys", type: "project", name: "AMS-01" },
-    { id: "proj-2", workspaceId: "rovisys", type: "project", name: "DC Utrecht Expansion" },
-    { id: "area-1", workspaceId: "personal", type: "area", name: "Music" },
-    { id: "area-2", workspaceId: "personal", type: "area", name: "Business" },
-    { id: "area-3", workspaceId: "personal", type: "area", name: "Website" },
+    { id: "proj-1", workspaceId: "rovisys", type: "project", name: "AMS-01", order: 0 },
+    { id: "proj-2", workspaceId: "rovisys", type: "project", name: "DC Utrecht Expansion", order: 1 },
+    { id: "area-1", workspaceId: "personal", type: "area", name: "Music", order: 0 },
+    { id: "area-2", workspaceId: "personal", type: "area", name: "Business", order: 1 },
+    { id: "area-3", workspaceId: "personal", type: "area", name: "Website", order: 2 },
     { id: "unassigned-rovisys", workspaceId: "rovisys", type: "project", name: "Sem projeto" },
     { id: "unassigned-personal", workspaceId: "personal", type: "area", name: "Sem projeto" },
   ],
@@ -141,17 +162,32 @@ export const useAppStore = create<AppStore>()(
   ],
 
   addContainer: (workspaceId, name) =>
-    set((state) => ({
-      containers: [
-        ...state.containers,
-        {
-          id: uid(),
-          workspaceId,
-          type: workspaceId === "rovisys" ? "project" : "area",
-          name,
-        },
-      ],
-    })),
+    set((state) => {
+      const ordered = sortContainers(
+        state.containers.filter(
+          (container) =>
+            container.workspaceId === workspaceId &&
+            !isUnassignedContainer(container)
+        )
+      );
+      const rankById = new Map(ordered.map((container, index) => [container.id, index]));
+
+      return {
+        containers: [
+          ...state.containers.map((container) => {
+            const order = rankById.get(container.id);
+            return order === undefined ? container : { ...container, order };
+          }),
+          {
+            id: uid(),
+            workspaceId,
+            type: workspaceId === "rovisys" ? "project" : "area",
+            name,
+            order: ordered.length,
+          },
+        ],
+      };
+    }),
 
   renameContainer: (containerId, name) =>
     set((state) => ({
@@ -173,6 +209,33 @@ export const useAppStore = create<AppStore>()(
             ? { ...item, containerId: unassignedId }
             : item
         ),
+      };
+    }),
+
+  moveContainer: (containerId, direction) =>
+    set((state) => {
+      const target = state.containers.find((container) => container.id === containerId);
+      if (!target || isUnassignedContainer(target)) return state;
+
+      const ordered = sortContainers(
+        state.containers.filter(
+          (container) =>
+            container.workspaceId === target.workspaceId &&
+            !isUnassignedContainer(container)
+        )
+      );
+      const nextIds = moveContainerId(
+        ordered.map((container) => container.id),
+        containerId,
+        direction
+      );
+      const rankById = new Map(nextIds.map((id, index) => [id, index]));
+
+      return {
+        containers: state.containers.map((container) => {
+          const order = rankById.get(container.id);
+          return order === undefined ? container : { ...container, order };
+        }),
       };
     }),
 
@@ -301,15 +364,47 @@ export const useAppStore = create<AppStore>()(
           ...item,
           priority:
             item.priority === "Alta" ? "Baixa" : "Alta",
+            priorityOrder: undefined,
         };
       }),
     })),
+
+  movePriorityItem: (itemId, direction, visibleOrderedIds) =>
+    set((state) => {
+      const target = state.items.find((item) => item.id === itemId);
+      if (!target) return state;
+
+      const targetIsPriority = target.priority === "Alta";
+
+      const itemsInPriorityGroup = state.items
+        .filter(
+          (item) =>
+            item.workspaceId === target.workspaceId &&
+            (item.priority === "Alta") === targetIsPriority
+        )
+        .slice()
+        .sort(compareActiveItems);
+      const nextOrder = movePriorityId(
+        itemsInPriorityGroup.map((item) => item.id),
+        visibleOrderedIds,
+        itemId,
+        direction
+      );
+      const rankById = new Map(nextOrder.map((id, index) => [id, index]));
+
+      return {
+        items: state.items.map((item) => {
+          const priorityOrder = rankById.get(item.id);
+          return priorityOrder === undefined ? item : { ...item, priorityOrder };
+        }),
+      };
+    }),
 
   getWorkspace: (workspaceId) =>
     get().workspaces.find((w) => w.id === workspaceId),
 
   getContainersByWorkspace: (workspaceId) =>
-    get().containers.filter((c) => c.workspaceId === workspaceId),
+    sortContainers(get().containers.filter((c) => c.workspaceId === workspaceId)),
 
   getContainerById: (containerId) =>
     get().containers.find((c) => c.id === containerId),
@@ -324,7 +419,10 @@ export const useAppStore = create<AppStore>()(
         : ["Feito"];
 
     return get().items.filter(
-      (item) => item.workspaceId === workspaceId && !excluded.includes(item.state)
+      (item) =>
+        item.workspaceId === workspaceId &&
+        !excluded.includes(item.state) &&
+        isItemVisibleInActiveList(item)
     );
   },
 
@@ -346,6 +444,7 @@ export const useAppStore = create<AppStore>()(
       partialize: (state) => ({
         containers: state.containers,
         items: state.items,
+        apiBaseUrl: state.apiBaseUrl,
       }),
     }
   )

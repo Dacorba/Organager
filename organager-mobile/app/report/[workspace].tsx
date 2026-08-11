@@ -1,38 +1,108 @@
-import { router, useLocalSearchParams } from "expo-router";
-import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { BackButton } from "@/components/back-button";
 import { useAppStore } from "@/store/useAppStore";
 import { ItemState, WorkspaceId } from "@/types";
+import { todayISO } from "@/utils/calendar";
+import {
+  getPersonalDailySummary,
+  timestampIsOnDate,
+} from "@/utils/daily-summary";
+import { useLocalSearchParams } from "expo-router";
+import { SafeAreaView, ScrollView, Text, View } from "react-native";
 
 function formatLines(lines: string[]) {
-  return lines.length ? lines.map((line) => `- ${line}`).join("\n") : "- sem registos";
+  return lines.length ? lines.map((line) => `• ${line}`).join("\n") : "—";
 }
 
-function localDateISO(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function Stat({ label, value }: { label: string; value: number | string }) {
+  return (
+    <View
+      style={{
+        flexGrow: 1,
+        flexBasis: 90,
+        backgroundColor: "#fff",
+        borderRadius: 18,
+        padding: 14,
+        borderWidth: 1,
+        borderColor: "#e2e8f0",
+        gap: 4,
+      }}
+    >
+      <Text style={{ fontSize: 24, fontWeight: "800", color: "#0f172a" }}>
+        {value}
+      </Text>
+      <Text style={{ color: "#64748b", fontWeight: "600" }}>{label}</Text>
+    </View>
+  );
 }
 
-function timestampIsOnDate(timestamp: string | undefined, dateISO: string) {
-  if (!timestamp) return false;
-
-  const date = new Date(timestamp);
-  return !Number.isNaN(date.getTime()) && localDateISO(date) === dateISO;
+function SummarySection({ title, lines }: { title: string; lines: string[] }) {
+  return (
+    <View
+      style={{
+        backgroundColor: "#fff",
+        borderRadius: 22,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: "#e2e8f0",
+        gap: 10,
+      }}
+    >
+      <Text style={{ fontSize: 18, fontWeight: "800", color: "#0f172a" }}>
+        {title}
+      </Text>
+      <Text style={{ color: "#334155", lineHeight: 24 }}>
+        {formatLines(lines)}
+      </Text>
+    </View>
+  );
 }
 
 export default function ReportScreen() {
   const { workspace } = useLocalSearchParams<{ workspace: WorkspaceId }>();
   const workspaceId = workspace as WorkspaceId;
-
-  const getWorkspace = useAppStore((s) => s.getWorkspace);
-  const items = useAppStore((s) => s.items);
-
+  const getWorkspace = useAppStore((state) => state.getWorkspace);
+  const items = useAppStore((state) => state.items);
   const currentWorkspace = getWorkspace(workspaceId);
 
-  if (!currentWorkspace || workspaceId !== "rovisys") return null;
+  if (!currentWorkspace) return null;
 
-  const today = localDateISO(new Date());
+  const today = todayISO();
+
+  if (workspaceId === "personal") {
+    const summary = getPersonalDailySummary(items, today);
+
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#f8fafc" }}>
+        <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
+          <BackButton />
+
+          <View style={{ gap: 4 }}>
+            <Text style={{ fontSize: 30, fontWeight: "700", color: "#0f172a" }}>
+              Resumo do dia
+            </Text>
+            <Text style={{ color: "#64748b" }}>{today}</Text>
+          </View>
+
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+            <Stat label="Propostas" value={summary.plannedCount} />
+            <Stat label="Feitas" value={summary.completed.length} />
+            <Stat label="Pendentes" value={summary.pending.length} />
+            <Stat label="Concluído" value={`${summary.completionPercentage}%`} />
+          </View>
+
+          <SummarySection
+            title="Feitas hoje"
+            lines={summary.completed.map((item) => item.title)}
+          />
+          <SummarySection
+            title="Ainda pendentes"
+            lines={summary.pending.map((item) => item.title)}
+          />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   const dailyEntries = items.flatMap((item) => {
     if (item.workspaceId !== workspaceId) return [];
 
@@ -48,52 +118,32 @@ export default function ReportScreen() {
         : [];
     }
 
-    const belongsToToday = timestampIsOnDate(item.stateUpdatedAt, today);
-
-    return belongsToToday ? [{ title: item.title, state: item.state }] : [];
+    return timestampIsOnDate(item.stateUpdatedAt, today)
+      ? [{ title: item.title, state: item.state }]
+      : [];
   });
 
   const titlesForState = (state: ItemState) =>
     dailyEntries.filter((entry) => entry.state === state).map((entry) => entry.title);
 
-  const reportText = `Relatório diário — ${currentWorkspace.name} — ${today}
-
-Feito hoje:
-${formatLines(titlesForState("Feito"))}
-
-Parcial:
-${formatLines(titlesForState("Parcial"))}
-
-Bloqueado:
-${formatLines(titlesForState("Bloqueado"))}
-
-Passa para amanhã:
-${formatLines(titlesForState("Adiado"))}`;
-
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#f8fafc" }}>
       <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
-        <Pressable onPress={() => router.back()}>
-          <Text style={{ fontSize: 16, fontWeight: "700", color: "#0f172a" }}>
-            ← Voltar
+        <BackButton />
+
+        <View style={{ gap: 4 }}>
+          <Text style={{ fontSize: 30, fontWeight: "700", color: "#0f172a" }}>
+            Relatório diário
           </Text>
-        </Pressable>
-
-        <Text style={{ fontSize: 30, fontWeight: "700", color: "#0f172a" }}>
-          Relatório diário
-        </Text>
-
-        <View
-          style={{
-            backgroundColor: "#fff",
-            borderRadius: 24,
-            padding: 16,
-            borderWidth: 1,
-            borderColor: "#e2e8f0",
-          }}
-        >
-          <Text style={{ color: "#334155", lineHeight: 22 }}>{reportText}</Text>
+          <Text style={{ color: "#64748b" }}>
+            {currentWorkspace.name} · {today}
+          </Text>
         </View>
+
+        <SummarySection title="Feito hoje" lines={titlesForState("Feito")} />
+        <SummarySection title="Parcial" lines={titlesForState("Parcial")} />
+        <SummarySection title="Bloqueado" lines={titlesForState("Bloqueado")} />
+        <SummarySection title="Passa para amanhã" lines={titlesForState("Adiado")} />
       </ScrollView>
     </SafeAreaView>
   );

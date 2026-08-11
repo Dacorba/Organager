@@ -1,6 +1,9 @@
 import { analyzePoint } from "@/services/analyzePoint";
 import { useAppStore } from "@/store/useAppStore";
 import { Item, ItemCategory, ItemState, Priority, RecurrenceType, WorkspaceId } from "@/types";
+import { BackButton } from "@/components/back-button";
+import { createManualTaskDraft } from "@/utils/manual-task";
+import { sortContainers } from "@/utils/containers";
 import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
@@ -68,6 +71,7 @@ export default function DetailScreen() {
     workspace?: WorkspaceId;
     containerId?: string;
     occurrenceDate?: string;
+    recurrence?: RecurrenceType;
   }>();
 
   const items = useAppStore((s) => s.items);
@@ -77,8 +81,11 @@ export default function DetailScreen() {
   const updateAnalyzedPoint = useAppStore((s) => s.updateAnalyzedPoint);
   const updateItemState = useAppStore((s) => s.updateItemState);
   const removeItem = useAppStore((s) => s.removeItem);
+  const apiBaseUrl = useAppStore((s) => s.apiBaseUrl);
 
   const isNew = params.id === "new";
+  const requestedRecurrence: RecurrenceType =
+    isNew && params.recurrence === "yearly" ? "yearly" : "none";
   const item = useMemo(
     () => (isNew ? undefined : items.find((i) => i.id === params.id)),
     [items, isNew, params.id]
@@ -99,7 +106,7 @@ export default function DetailScreen() {
   );
 
   const containers = useMemo(
-    () => allContainers.filter((c) => c.workspaceId === workspaceId),
+    () => sortContainers(allContainers.filter((c) => c.workspaceId === workspaceId)),
     [allContainers, workspaceId]
   );
 
@@ -190,26 +197,29 @@ export default function DetailScreen() {
   }
 
   async function handleAnalyze() {
-    setMessage("AI: botão clicado.");
+    setMessage("Análise iniciada.");
 
     if (!text.trim()) {
-      setMessage("AI: texto vazio.");
+      setMessage("Escreve primeiro a tarefa que queres analisar.");
       return;
     }
 
     try {
       setLoading(true);
-      setMessage("AI: a chamar backend...");
+      setMessage("A analisar tarefa...");
 
-      const result = await analyzePoint({
-        workspaceId,
-        rawText: text,
-        containers: containers
-          .filter((c) => !c.id.startsWith("unassigned-"))
-          .map((c) => ({ id: c.id, name: c.name })),
-      });
+      const result = await analyzePoint(
+        {
+          workspaceId,
+          rawText: text,
+          containers: containers
+            .filter((c) => !c.id.startsWith("unassigned-"))
+            .map((c) => ({ id: c.id, name: c.name })),
+        },
+        apiBaseUrl
+      );
 
-      setMessage("AI: resposta recebida.");
+      setMessage("Análise concluída. Confirma os dados antes de guardar.");
 
       setPreview({
         title: result.title,
@@ -222,11 +232,11 @@ export default function DetailScreen() {
         dateText: result.dateText,
         timeText: result.timeText,
         dateISO: result.dateISO,
-        recurrence: item?.recurrence ?? "none",
+        recurrence: isNew ? requestedRecurrence : item?.recurrence ?? "none",
 
       });
     } catch (error) {
-      setMessage(`AI erro: ${String(error)}`);
+      setMessage(`Erro na análise: ${String(error)}`);
     } finally {
       setLoading(false);
     }
@@ -297,6 +307,18 @@ export default function DetailScreen() {
     }
   }
 
+  function handleManualEntry() {
+    try {
+      setPreview({
+        ...createManualTaskDraft(text, container?.id ?? unassignedId),
+        recurrence: requestedRecurrence,
+      });
+      setMessage("Modo manual: confirma os dados antes de guardar.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   function deleteCurrentItem() {
     if (isNew || !item) return;
 
@@ -319,24 +341,16 @@ export default function DetailScreen() {
 
   return (
     <ScrollView style={{ flex: 1, padding: 16 }}>
-      <Pressable
-        onPress={() => router.back()}
-        style={{
-          alignSelf: "flex-start",
-          paddingVertical: 12,
-          paddingHorizontal: 16,
-          borderRadius: 14,
-          backgroundColor: "#e5e7eb",
-          marginBottom: 16,
-        }}
-      >
-        <Text style={{ fontSize: 18, fontWeight: "900", color: "#0f172a" }}>
-          ← Voltar
-        </Text>
-      </Pressable>
+      <View style={{ marginBottom: 16 }}>
+        <BackButton />
+      </View>
 
       <Text style={{ fontSize: 28, fontWeight: "bold", marginBottom: 4 }}>
-        {isNew ? "Novo ponto" : item?.title}
+        {isNew
+          ? requestedRecurrence === "yearly"
+            ? "Novo aniversário"
+            : "Novo ponto"
+          : item?.title}
       </Text>
 
       <Text style={{ color: "#666", marginBottom: 12 }}>
@@ -351,6 +365,8 @@ export default function DetailScreen() {
             value={text}
             onChangeText={setText}
             multiline
+            autoCorrect
+            spellCheck
             style={{
               borderWidth: 1,
               borderColor: "#ccc",
@@ -361,6 +377,23 @@ export default function DetailScreen() {
               textAlignVertical: "top",
             }}
           />
+
+          <Pressable
+            onPress={handleManualEntry}
+            style={{
+              backgroundColor: "#fff",
+              borderWidth: 1,
+              borderColor: "#0f172a",
+              padding: 16,
+              borderRadius: 14,
+              alignItems: "center",
+              marginBottom: 12,
+            }}
+          >
+            <Text style={{ color: "#0f172a", fontWeight: "bold" }}>
+              Continuar manualmente
+            </Text>
+          </Pressable>
 
           <Pressable
             onPress={handleAnalyze}
@@ -374,7 +407,7 @@ export default function DetailScreen() {
             }}
           >
             <Text style={{ color: "#fff", fontWeight: "bold" }}>
-              {loading ? "A analisar..." : "Analisar com AI"}
+              {loading ? "A analisar..." : "Analisar tarefa"}
             </Text>
           </Pressable>
 
@@ -419,6 +452,8 @@ export default function DetailScreen() {
           <TextInput
             value={preview.title}
             onChangeText={(v) => setPreview({ ...preview, title: v })}
+            autoCorrect
+            spellCheck
             style={{ borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 10 }}
           />
 
@@ -427,6 +462,8 @@ export default function DetailScreen() {
             value={preview.description}
             onChangeText={(v) => setPreview({ ...preview, description: v })}
             multiline
+            autoCorrect
+            spellCheck
             style={{
               borderWidth: 1,
               borderColor: "#ddd",
@@ -493,66 +530,70 @@ export default function DetailScreen() {
             style={{ borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 10 }}
           />
 
-          <Text>Recorrência</Text>
+          {isNew ? (
+            <>
+              <Text>Recorrência</Text>
 
-          <View style={{ gap: 8 }}>
-            {recurrenceOptions.map((option) => {
-              const active = preview.recurrence === option.value;
+              <View style={{ gap: 8 }}>
+                {recurrenceOptions.map((option) => {
+                  const active = preview.recurrence === option.value;
 
-              return (
-                <Pressable
-                  key={option.value}
-                  onPress={() =>
-                    setPreview({
-                      ...preview,
-                      recurrence: option.value,
-                    })
-                  }
-                  style={{
-                    backgroundColor: active ? "#0f172a" : "#e5e7eb",
-                    padding: 12,
-                    borderRadius: 12,
-                  }}
-                >
-                  <Text
+                  return (
+                    <Pressable
+                      key={option.value}
+                      onPress={() =>
+                        setPreview({
+                          ...preview,
+                          recurrence: option.value,
+                        })
+                      }
+                      style={{
+                        backgroundColor: active ? "#0f172a" : "#e5e7eb",
+                        padding: 12,
+                        borderRadius: 12,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: active ? "#fff" : "#111827",
+                          fontWeight: "800",
+                        }}
+                      >
+                        {option.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {preview.recurrence !== "none" && !preview.dateISO ? (
+                <Text style={{ color: "#b45309", fontWeight: "700" }}>
+                  Para tarefas recorrentes, mete uma data de início em YYYY-MM-DD.
+                </Text>
+              ) : null}
+
+              <Text>Projeto</Text>
+              {containers.map((c) => {
+                const active = preview.containerId === c.id;
+                return (
+                  <Pressable
+                    key={c.id}
+                    onPress={() => setPreview({ ...preview, containerId: c.id })}
                     style={{
-                      color: active ? "#fff" : "#111827",
-                      fontWeight: "800",
+                      backgroundColor: active ? "#0f172a" : "#e5e7eb",
+                      padding: 10,
+                      borderRadius: 10,
+                      marginBottom: 6,
                     }}
                   >
-                    {option.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {preview.recurrence !== "none" && !preview.dateISO ? (
-            <Text style={{ color: "#b45309", fontWeight: "700" }}>
-              Para tarefas recorrentes, mete uma data de início em YYYY-MM-DD.
-            </Text>
-          ) : null}          
-
-          <Text>Projeto</Text>
-          {containers.map((c) => {
-            const active = preview.containerId === c.id;
-            return (
-              <Pressable
-                key={c.id}
-                onPress={() => setPreview({ ...preview, containerId: c.id })}
-                style={{
-                  backgroundColor: active ? "#0f172a" : "#e5e7eb",
-                  padding: 10,
-                  borderRadius: 10,
-                  marginBottom: 6,
-                }}
-              >
-                <Text style={{ color: active ? "#fff" : "#111827", fontWeight: "700" }}>
-                  {c.name}
-                </Text>
-              </Pressable>
-            );
-          })}
+                    <Text style={{ color: active ? "#fff" : "#111827", fontWeight: "700" }}>
+                      {c.name}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </>
+          ) : null}
 
           <Text>Prioridade</Text>
           <Pressable

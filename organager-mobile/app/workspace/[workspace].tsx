@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { router, type Href, useLocalSearchParams } from "expo-router";
 import { useMemo, useState } from "react";
 import {
   Alert,
@@ -11,6 +11,8 @@ import {
 } from "react-native";
 import { useAppStore } from "../../store/useAppStore";
 import { WorkspaceId } from "../../types";
+import { BackButton } from "../../components/back-button";
+import { isUnassignedContainer, sortContainers } from "../../utils/containers";
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
@@ -37,6 +39,7 @@ export default function WorkspaceScreen() {
   const addContainer = useAppStore((s) => s.addContainer);
   const renameContainer = useAppStore((s) => s.renameContainer);
   const removeContainer = useAppStore((s) => s.removeContainer);
+  const moveContainer = useAppStore((s) => s.moveContainer);
 
   const [newName, setNewName] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -48,8 +51,15 @@ export default function WorkspaceScreen() {
   );
 
   const containers = useMemo(
-    () => allContainers.filter((c) => c.workspaceId === workspaceId),
+    () => sortContainers(allContainers.filter((c) => c.workspaceId === workspaceId)),
     [allContainers, workspaceId]
+  );
+  const movableContainerIds = useMemo(
+    () =>
+      containers
+        .filter((container) => !isUnassignedContainer(container))
+        .map((container) => container.id),
+    [containers]
   );
 
   if (!currentWorkspace) return null;
@@ -81,11 +91,7 @@ export default function WorkspaceScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#f8fafc" }}>
       <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
-        <Pressable onPress={() => router.back()}>
-          <Text style={{ fontSize: 16, fontWeight: "700", color: "#0f172a" }}>
-            ← Voltar
-          </Text>
-        </Pressable>
+        <BackButton />
         <View style={{ gap: 6 }}>
           <Text style={{ fontSize: 30, fontWeight: "700", color: "#0f172a" }}>
             {currentWorkspace.name}
@@ -114,30 +120,30 @@ export default function WorkspaceScreen() {
             <Text style={{ color: "#0f172a", fontWeight: "600" }}>Lista ativa</Text>
           </Pressable>
 
-          {workspaceId === "rovisys" ? (
-            <Pressable
-              onPress={() =>
-                router.push({
-                  pathname: "/report/[workspace]",
-                  params: { workspace: workspaceId },
-                })
-              }
-              style={{
-                backgroundColor: "#fff",
-                borderWidth: 1,
-                borderColor: "#cbd5e1",
-                borderRadius: 16,
-                paddingHorizontal: 16,
-                paddingVertical: 12,
-              }}
-            >
-              <Text style={{ color: "#0f172a", fontWeight: "600" }}>
-                Relatório diário
-              </Text>
-            </Pressable>
-          ) : null}
+          <Pressable
+            onPress={() =>
+              router.push({
+                pathname: "/report/[workspace]",
+                params: { workspace: workspaceId },
+              })
+            }
+            style={{
+              backgroundColor: "#fff",
+              borderWidth: 1,
+              borderColor: "#cbd5e1",
+              borderRadius: 16,
+              paddingHorizontal: 16,
+              paddingVertical: 12,
+            }}
+          >
+            <Text style={{ color: "#0f172a", fontWeight: "600" }}>
+              {workspaceId === "personal" ? "Resumo do dia" : "Relatório diário"}
+            </Text>
+          </Pressable>
 
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Adicionar nova tarefa"
             onPress={() => {
               if (!containers[0]) return;
               router.push({
@@ -160,7 +166,7 @@ export default function WorkspaceScreen() {
               justifyContent: "center",
             }}
           >
-            <Text style={{ fontSize: 22 }}>🎤</Text>
+            <Text style={{ fontSize: 32, lineHeight: 34, color: "#0f172a" }}>+</Text>
           </Pressable>
         </View>
 
@@ -214,12 +220,16 @@ export default function WorkspaceScreen() {
         <View style={{ gap: 12 }}>
           {containers.map((container) => {
             const isEditing = editingId === container.id;
-            const isUnassigned = container.id.startsWith("unassigned-");
+            const isUnassigned = isUnassignedContainer(container);
+            const movableIndex = movableContainerIds.indexOf(container.id);
 
             return (
               <Card key={container.id}>
                 {isEditing ? (
                   <View style={{ gap: 10 }}>
+                    <Text style={{ fontSize: 18, fontWeight: "700", color: "#0f172a" }}>
+                      Gerir {workspaceId === "rovisys" ? "projeto" : "área"}
+                    </Text>
                     <TextInput
                       value={editingName}
                       onChangeText={setEditingName}
@@ -232,7 +242,7 @@ export default function WorkspaceScreen() {
                         paddingVertical: 10,
                       }}
                     />
-                    <View style={{ flexDirection: "row", gap: 8 }}>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                       <Pressable
                         onPress={saveContainerName}
                         style={{
@@ -258,29 +268,116 @@ export default function WorkspaceScreen() {
                       >
                         <Text style={{ color: "#334155", fontWeight: "700" }}>Cancelar</Text>
                       </Pressable>
+                      <Pressable
+                        onPress={() =>
+                          confirmRemoveContainer(container.id, container.name)
+                        }
+                        style={{
+                          backgroundColor: "#fee2e2",
+                          borderRadius: 12,
+                          paddingHorizontal: 14,
+                          paddingVertical: 10,
+                        }}
+                      >
+                        <Text style={{ color: "#b91c1c", fontWeight: "700" }}>
+                          Eliminar
+                        </Text>
+                      </Pressable>
                     </View>
                   </View>
                 ) : (
                   <View style={{ gap: 12 }}>
-                    <Pressable
-                      onPress={() =>
-                        router.push({
-                          pathname: "/active/[actworkspace]",
-                          params: {
-                            actworkspace: workspaceId,
-                            containerId: container.id,
-                          },
-                        })
-                      }
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 12,
+                      }}
                     >
-                      <Text style={{ fontSize: 18, fontWeight: "700", color: "#0f172a" }}>
+                      <Text
+                        style={{
+                          flex: 1,
+                          fontSize: 18,
+                          fontWeight: "700",
+                          color: "#0f172a",
+                        }}
+                      >
                         {container.name}
                       </Text>
-                    </Pressable>
 
-                    {!isUnassigned ? (
-                      <View style={{ flexDirection: "row", gap: 8 }}>
+                      {!isUnassigned ? (
+                        <View style={{ flexDirection: "row", gap: 6 }}>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Subir ${container.name}`}
+                            disabled={movableIndex === 0}
+                            onPress={() => moveContainer(container.id, "up")}
+                            style={{
+                              width: 48,
+                              height: 48,
+                              borderRadius: 12,
+                              backgroundColor: "#e2e8f0",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              opacity: movableIndex === 0 ? 0.3 : 1,
+                            }}
+                          >
+                            <Text style={{ fontSize: 28, fontWeight: "900", color: "#334155" }}>
+                              ↑
+                            </Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Descer ${container.name}`}
+                            disabled={movableIndex === movableContainerIds.length - 1}
+                            onPress={() => moveContainer(container.id, "down")}
+                            style={{
+                              width: 48,
+                              height: 48,
+                              borderRadius: 12,
+                              backgroundColor: "#e2e8f0",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              opacity:
+                                movableIndex === movableContainerIds.length - 1 ? 0.3 : 1,
+                            }}
+                          >
+                            <Text style={{ fontSize: 28, fontWeight: "900", color: "#334155" }}>
+                              ↓
+                            </Text>
+                          </Pressable>
+                        </View>
+                      ) : null}
+                    </View>
+
+                    <View style={{ flexDirection: "row", gap: 8 }}>
+                      <Pressable
+                        onPress={() =>
+                          router.push({
+                            pathname: "/active/[actworkspace]",
+                            params: {
+                              actworkspace: workspaceId,
+                              containerId: container.id,
+                            },
+                          })
+                        }
+                        style={{
+                          backgroundColor: "#0f172a",
+                          borderRadius: 12,
+                          minHeight: 48,
+                          flex: 1,
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <Text style={{ color: "#fff", fontWeight: "700" }}>Entrar</Text>
+                      </Pressable>
+
+                      {!isUnassigned ? (
                         <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Gerir ${container.name}`}
                           onPress={() => {
                             setEditingId(container.id);
                             setEditingName(container.name);
@@ -288,26 +385,35 @@ export default function WorkspaceScreen() {
                           style={{
                             backgroundColor: "#e2e8f0",
                             borderRadius: 12,
-                            paddingHorizontal: 12,
-                            paddingVertical: 8,
+                            width: 48,
+                            height: 48,
+                            alignItems: "center",
+                            justifyContent: "center",
                           }}
                         >
-                          <Text style={{ color: "#334155", fontWeight: "700" }}>Editar</Text>
+                          <Text style={{ color: "#334155", fontSize: 22 }}>⚙</Text>
                         </Pressable>
-                        <Pressable
-                          onPress={() =>
-                            confirmRemoveContainer(container.id, container.name)
-                          }
-                          style={{
-                            backgroundColor: "#fee2e2",
-                            borderRadius: 12,
-                            paddingHorizontal: 12,
-                            paddingVertical: 8,
-                          }}
-                        >
-                          <Text style={{ color: "#b91c1c", fontWeight: "700" }}>Eliminar</Text>
-                        </Pressable>
-                      </View>
+                      ) : null}
+                    </View>
+
+                    {isUnassigned && workspaceId === "personal" ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Abrir todos os aniversários"
+                        onPress={() => router.push("/birthdays" as Href)}
+                        style={{
+                          minHeight: 48,
+                          borderRadius: 12,
+                          backgroundColor: "#fce7f3",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          paddingHorizontal: 14,
+                        }}
+                      >
+                        <Text style={{ color: "#9d174d", fontWeight: "800" }}>
+                          🎂 Aniversários
+                        </Text>
+                      </Pressable>
                     ) : null}
                   </View>
                 )}

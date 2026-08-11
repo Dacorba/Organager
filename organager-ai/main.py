@@ -48,6 +48,61 @@ def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+COMMON_SPELLING_CORRECTIONS = {
+    "nao": "não",
+    "reuniao": "reunião",
+    "reunioes": "reuniões",
+    "amanha": "amanhã",
+    "decisao": "decisão",
+    "decisoes": "decisões",
+    "proxima": "próxima",
+    "proximo": "próximo",
+    "terca": "terça",
+    "sabado": "sábado",
+    "critico": "crítico",
+    "critica": "crítica",
+    "documentacao": "documentação",
+    "informacao": "informação",
+    "informacoes": "informações",
+    "descricao": "descrição",
+    "alteracao": "alteração",
+    "alteracoes": "alterações",
+    "confirmacao": "confirmação",
+    "necessario": "necessário",
+    "necessaria": "necessária",
+    "possivel": "possível",
+}
+
+
+def correct_common_spelling(text: str) -> str:
+    def replace_word(match: re.Match[str]) -> str:
+        source = match.group(0)
+        replacement = COMMON_SPELLING_CORRECTIONS.get(source.lower())
+        if not replacement:
+            return source
+        if source.isupper():
+            return replacement.upper()
+        if source[0].isupper():
+            return replacement[0].upper() + replacement[1:]
+        return replacement
+
+    corrected = re.sub(r"\b[\wÀ-ÿ]+\b", replace_word, text)
+
+    def replace_spoken_time(match: re.Match[str]) -> str:
+        return "Às " if match.group(0)[0].isupper() else "às "
+
+    return re.sub(
+        r"\b(?:as|ás)\s+(?=\d{1,2}(?::\d{2}|h\d{0,2})?\b)",
+        replace_spoken_time,
+        corrected,
+        flags=re.IGNORECASE,
+    )
+
+
+def clean_text(text: str) -> str:
+    return correct_common_spelling(normalize_text(text))
+
+
 def short_title(text: str, limit: int = 70) -> str:
     text = normalize_text(text)
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
@@ -117,7 +172,10 @@ def extract_time(text: str) -> Optional[str]:
         minute = clock_match.group(2) or clock_match.group(3) or "00"
         return f"{hour:02d}:{minute}"
 
-    spoken_hour_match = re.search(r"\b(?:às|as)\s+([01]?\d|2[0-3])\b", lower)
+    spoken_hour_match = re.search(
+        r"\b(?:às|as)\s+([01]?\d|2[0-3])(?!\s*[:h])\b",
+        lower,
+    )
     if spoken_hour_match:
         return f"{int(spoken_hour_match.group(1)):02d}:00"
 
@@ -217,7 +275,7 @@ def health():
 
 @app.post("/analyze-point", response_model=AnalyzeResponse)
 def analyze_point(payload: AnalyzeRequest):
-    cleaned = normalize_text(payload.rawText)
+    cleaned = clean_text(payload.rawText)
     category, suggested_state, category_conf = classify_category(payload.workspaceId, cleaned)
     container_id, container_name, container_conf = guess_container(cleaned, payload.containers)
     person = extract_person(cleaned)

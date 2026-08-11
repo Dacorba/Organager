@@ -43,3 +43,6 @@ Thumbs.db
 
 # Local developer commands
 comandos.local.txt
+
+# Local source snapshots
+local-backups/

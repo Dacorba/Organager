@@ -1,4 +1,5 @@
 import { ItemCategory, ItemState, Priority, WorkspaceId } from "../types";
+import { backendUrl } from "./backend";
 
 export type AnalyzePointInput = {
   workspaceId: WorkspaceId;
@@ -21,7 +22,6 @@ export type AnalyzePointResult = {
   dateISO: string | null;
 };
 
-const API_BASE = "http://172.17.75.202:8010";
 const REQUEST_TIMEOUT_MS = 10_000;
 
 const categoriesByWorkspace: Record<WorkspaceId, readonly ItemCategory[]> = {
@@ -151,13 +151,14 @@ function parseAnalyzePointResult(
 }
 
 export async function analyzePoint(
-  input: AnalyzePointInput
+  input: AnalyzePointInput,
+  apiBaseUrl: string
 ): Promise<AnalyzePointResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${API_BASE}/analyze-point`, {
+    const response = await fetch(backendUrl(apiBaseUrl, "/analyze-point"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

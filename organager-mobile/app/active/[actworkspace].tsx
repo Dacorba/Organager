@@ -1,21 +1,20 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, SafeAreaView, ScrollView, Text, View, TouchableOpacity } from "react-native";
+import { Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { BackButton } from "../../components/back-button";
 import { useAppStore } from "../../store/useAppStore";
 import { Item, RecurrenceType, WorkspaceId } from "../../types";
+import {
+  formatDateISO,
+  isItemVisibleInActiveList,
+  isOccurrenceFinished,
+  itemOccursOnDate,
+  todayISO,
+} from "../../utils/calendar";
+import { compareActiveItems, compareCalendarItems } from "../../utils/priority";
+import { sortContainers } from "../../utils/containers";
 
 type ViewMode = "active" | "calendar";
-
-function formatDateISO(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function todayISO() {
-  return formatDateISO(new Date());
-}
 
 function monthLabel(date: Date) {
   return date.toLocaleDateString("pt-PT", {
@@ -43,16 +42,6 @@ function getCalendarDays(monthDate: Date) {
   return days;
 }
 
-function parseISODate(dateISO?: string) {
-  if (!dateISO) return null;
-
-  const [year, month, day] = dateISO.split("-").map(Number);
-
-  if (!year || !month || !day) return null;
-
-  return new Date(year, month - 1, day);
-}
-
 function recurrenceLabel(recurrence?: RecurrenceType) {
   switch (recurrence ?? "none") {
     case "daily":
@@ -68,65 +57,6 @@ function recurrenceLabel(recurrence?: RecurrenceType) {
     default:
       return undefined;
   }
-}
-
-function itemOccursOnDate(item: Item, dateISO: string) {
-  const recurrence = item.recurrence ?? "none";
-  const today = todayISO();
-
-  // Uma tarefa aberta aparece apenas hoje. À meia-noite, continua pendente
-  // e passa automaticamente para o novo dia, sem preencher datas futuras.
-  if (!item.dateISO) {
-    return recurrence === "none" && dateISO === today;
-  }
-
-  // Tarefas pontuais atrasadas também transitam para hoje. Tarefas futuras
-  // permanecem exclusivamente na data marcada.
-  if (recurrence === "none") {
-    if (item.dateISO < today) return dateISO === today;
-    return item.dateISO === dateISO;
-  }
-
-  // Recorrência só começa a partir da data inicial
-  if (dateISO < item.dateISO) {
-    return false;
-  }
-
-  const startDate = parseISODate(item.dateISO);
-  const targetDate = parseISODate(dateISO);
-
-  if (!startDate || !targetDate) return false;
-
-  if (recurrence === "daily") {
-    return true;
-  }
-
-  if (recurrence === "weekdays") {
-    const day = targetDate.getDay();
-    return day >= 1 && day <= 5;
-  }
-
-  if (recurrence === "weekly") {
-    return startDate.getDay() === targetDate.getDay();
-  }
-
-  if (recurrence === "monthly") {
-    return startDate.getDate() === targetDate.getDate();
-  }
-
-  if (recurrence === "yearly") {
-    return (
-      startDate.getMonth() === targetDate.getMonth() &&
-      startDate.getDate() === targetDate.getDate()
-    );
-  }
-
-  return false;
-}
-
-function isOccurrenceFinished(item: Item, dateISO: string) {
-  const state = item.occurrenceStates?.[dateISO];
-  return state === "Feito" || state === "Arquivado";
 }
 
 function SelectPill({
@@ -185,10 +115,18 @@ function ItemCard({
     item,
     onOpen,
     onTogglePriority,
+    showDetails,
+    onMovePriority,
+    isFirstPriority,
+    isLastPriority,
   }: {
     item: Item;
     onOpen: (id: string) => void;
     onTogglePriority: (id: string) => void;
+    showDetails: boolean;
+    onMovePriority?: (id: string, direction: "up" | "down") => void;
+    isFirstPriority?: boolean;
+    isLastPriority?: boolean;
   }) {
   return (
     <Pressable
@@ -221,32 +159,91 @@ function ItemCard({
           {item.title}
         </Text>
 
-        <Pressable
-          onPress={(e) => {
-            e.stopPropagation();
-            onTogglePriority(item.id);
-          }}
-        >
-          <Text
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              item.priority === "Alta" ? "Retirar prioridade" : "Marcar como prioritária"
+            }
+            onPress={(event) => {
+              event.stopPropagation();
+              onTogglePriority(item.id);
+            }}
             style={{
-              fontSize: 30,
-              color: item.priority === "Alta" ? "#ef4444" : "#1f2937",
-              textShadowColor: item.priority === "Alta" ? "#ef4444" : "transparent",
-              textShadowOffset: { width: 0, height: 0 },
-              textShadowRadius: item.priority === "Alta" ? 8 : 0,
+              width: 44,
+              height: 44,
+              alignItems: "center",
+              justifyContent: "center",
             }}
           >
-            ▲
-          </Text>
-        </Pressable>
+            <Text
+              style={{
+                fontSize: 30,
+                color: item.priority === "Alta" ? "#ef4444" : "#1f2937",
+                textShadowColor: item.priority === "Alta" ? "#ef4444" : "transparent",
+                textShadowOffset: { width: 0, height: 0 },
+                textShadowRadius: item.priority === "Alta" ? 8 : 0,
+              }}
+            >
+              ▲
+            </Text>
+          </Pressable>
+
+          {onMovePriority ? (
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Subir na ordem desta lista"
+                disabled={isFirstPriority}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  onMovePriority(item.id, "up");
+                }}
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 12,
+                  backgroundColor: "#e2e8f0",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: isFirstPriority ? 0.25 : 1,
+                }}
+              >
+                <Text style={{ fontSize: 28, fontWeight: "900", color: "#334155" }}>↑</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Descer na ordem desta lista"
+                disabled={isLastPriority}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  onMovePriority(item.id, "down");
+                }}
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 12,
+                  backgroundColor: "#e2e8f0",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: isLastPriority ? 0.25 : 1,
+                }}
+              >
+                <Text style={{ fontSize: 28, fontWeight: "900", color: "#334155" }}>↓</Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
       </View>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-        <Badge label={item.category} />
-        <Badge label={item.state === "Não feito" ? "Novo" : item.state} />
-        <Badge label={item.dateISO ? item.dateText ?? item.dateISO : "Aberta"} />
-        <Badge label={recurrenceLabel(item.recurrence)} />
-        <Badge label={item.person ? `👤 ${item.person}` : undefined} />
-      </View>
+      {showDetails ? (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+          <Badge label={item.category} />
+          <Badge label={item.state === "Não feito" ? "Novo" : item.state} />
+          <Badge label={item.dateISO ? item.dateText ?? item.dateISO : "Aberta"} />
+          <Badge label={recurrenceLabel(item.recurrence)} />
+          <Badge label={item.person ? `👤 ${item.person}` : undefined} />
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -257,12 +254,16 @@ function SectionCard({
   onOpen,
   onTogglePriority,
   occurrenceDate,
+  showDetails,
+  onMovePriority,
 }: {
   title: string;
   items: Item[];
   onOpen: (id: string, occurrenceDate?: string) => void;
   onTogglePriority: (id: string) => void;
   occurrenceDate?: string;
+  showDetails: boolean;
+  onMovePriority?: (id: string, direction: "up" | "down") => void;
 }) {
   return (
     <View
@@ -279,7 +280,7 @@ function SectionCard({
         {title}
       </Text>
 
-      {items.map((item) => {
+      {items.map((item, index) => {
         const occurrenceState = occurrenceDate
           ? item.occurrenceStates?.[occurrenceDate]
           : undefined;
@@ -293,6 +294,10 @@ function SectionCard({
             item={displayedItem}
             onOpen={(id) => onOpen(id, occurrenceDate)}
             onTogglePriority={onTogglePriority}
+            showDetails={showDetails}
+            onMovePriority={onMovePriority}
+            isFirstPriority={index === 0}
+            isLastPriority={index === items.length - 1}
           />
         );
       })}
@@ -313,8 +318,10 @@ export default function ActiveScreen() {
   const allContainers = useAppStore((s) => s.containers);
   const items = useAppStore((s) => s.items);
   const togglePriority = useAppStore((s) => s.togglePriority);
+  const movePriorityItem = useAppStore((s) => s.movePriorityItem);
   const [containerFilter, setContainerFilter] = useState<string>("all");
   const [viewMode, setViewMode] = useState<ViewMode>("active");
+  const [showDetails, setShowDetails] = useState(false);
   const [visibleMonth, setVisibleMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(todayISO());
   const currentWorkspace = useMemo(
@@ -323,7 +330,7 @@ export default function ActiveScreen() {
   );
 
   const containers = useMemo(
-    () => allContainers.filter((c) => c.workspaceId === workspaceId),
+    () => sortContainers(allContainers.filter((c) => c.workspaceId === workspaceId)),
     [allContainers, workspaceId]
   );
 
@@ -333,7 +340,7 @@ export default function ActiveScreen() {
     }
   }, [containerId]);
 
-  const activeItems = useMemo(() => {
+  const workspaceItems = useMemo(() => {
     const excluded =
       workspaceId === "personal"
         ? ["Feito", "Arquivado", "Backlog"]
@@ -347,29 +354,21 @@ export default function ActiveScreen() {
   }, [items, workspaceId]);
 
   const filteredByContainer = useMemo(() => {
-    return activeItems.filter(
+    return workspaceItems.filter(
+      (item) =>
+        isItemVisibleInActiveList(item) &&
+        (containerFilter === "all" || item.containerId === containerFilter)
+    );
+  }, [workspaceItems, containerFilter]);
+
+  const calendarItems = useMemo(() => {
+    return workspaceItems.filter(
       (item) => containerFilter === "all" || item.containerId === containerFilter
     );
-  }, [activeItems, containerFilter]);
+  }, [workspaceItems, containerFilter]);
 
   const activeListItems = useMemo(() => {
-    return filteredByContainer
-      .slice()
-      .sort((a, b) => {
-        const aPriority = a.priority === "Alta" ? 1 : 0;
-        const bPriority = b.priority === "Alta" ? 1 : 0;
-
-        if (aPriority !== bPriority) return bPriority - aPriority;
-
-        const aDate = a.dateISO ?? "9999-12-31";
-        const bDate = b.dateISO ?? "9999-12-31";
-
-        if (aDate !== bDate) return aDate.localeCompare(bDate);
-
-        return String(a.timeText ?? "99:99").localeCompare(
-          String(b.timeText ?? "99:99")
-        );
-      });
+    return filteredByContainer.slice().sort(compareActiveItems);
   }, [filteredByContainer]);
 
   const priorityItems = useMemo(() => {
@@ -386,18 +385,14 @@ export default function ActiveScreen() {
   );
 
   const selectedDateItems = useMemo(() => {
-    return filteredByContainer
+    return calendarItems
       .filter(
         (item) =>
           itemOccursOnDate(item, selectedDate) &&
           !isOccurrenceFinished(item, selectedDate)
       )
-      .sort((a, b) =>
-        String(a.timeText ?? "99:99").localeCompare(
-          String(b.timeText ?? "99:99")
-        )
-      );
-  }, [filteredByContainer, selectedDate]);
+      .sort(compareCalendarItems);
+  }, [calendarItems, selectedDate]);
 
   const itemsByDate = useMemo(() => {
     const map = new Map<string, Item[]>();
@@ -406,9 +401,11 @@ export default function ActiveScreen() {
       if (!date) return;
 
       const key = formatDateISO(date);
-      const dayItems = filteredByContainer.filter(
-        (item) => itemOccursOnDate(item, key) && !isOccurrenceFinished(item, key)
-      );
+      const dayItems = calendarItems
+        .filter(
+          (item) => itemOccursOnDate(item, key) && !isOccurrenceFinished(item, key)
+        )
+        .sort(compareCalendarItems);
 
       if (dayItems.length > 0) {
         map.set(key, dayItems);
@@ -416,7 +413,7 @@ export default function ActiveScreen() {
     });
 
     return map;
-  }, [calendarDays, filteredByContainer]);
+  }, [calendarDays, calendarItems]);
 
   function changeMonth(offset: number) {
     setVisibleMonth((current) => {
@@ -450,9 +447,7 @@ export default function ActiveScreen() {
         </Text>
 
         <View style={{ paddingBottom: 12 }}>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Text style={{ fontSize: 18 }}>← Voltar</Text>
-          </TouchableOpacity>
+          <BackButton />
         </View>
 
         <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
@@ -465,6 +460,11 @@ export default function ActiveScreen() {
             label="Calendário"
             active={viewMode === "calendar"}
             onPress={() => setViewMode("calendar")}
+          />
+          <SelectPill
+            label={showDetails ? "Vista detalhada" : "Vista compacta"}
+            active={showDetails}
+            onPress={() => setShowDetails((current) => !current)}
           />
         </View>
 
@@ -622,6 +622,7 @@ export default function ActiveScreen() {
               onOpen={openItem}
               onTogglePriority={togglePriority}
               occurrenceDate={selectedDate}
+              showDetails={showDetails}
             />
 
             {!selectedDateItems.length ? (
@@ -643,6 +644,14 @@ export default function ActiveScreen() {
               }
               onOpen={openItem}
               onTogglePriority={togglePriority}
+              showDetails={showDetails}
+              onMovePriority={(id, direction) =>
+                movePriorityItem(
+                  id,
+                  direction,
+                  priorityItems.map((item) => item.id)
+                )
+              }
             />
 
             <SectionCard
@@ -656,6 +665,14 @@ export default function ActiveScreen() {
               }
               onOpen={openItem}
               onTogglePriority={togglePriority}
+              showDetails={showDetails}
+              onMovePriority={(id, direction) =>
+                movePriorityItem(
+                  id,
+                  direction,
+                  normalItems.map((item) => item.id)
+                )
+              }
             />
 
             {!activeListItems.length ? (
