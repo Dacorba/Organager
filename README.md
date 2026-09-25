@@ -17,6 +17,6 @@ Organager is a personal productivity and task management application designed to
  
 ## Status
  
-Active development.
-
-Organager is currently used as a daily productivity and task management tool. The application is fully functional and continuously refined through real-world usage and testing.
+Beta testing.
+ 
+The application is currently in active use and undergoing continuous refinement based on day-to-day usage, feedback and feature validation.
