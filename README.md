@@ -16,7 +16,7 @@ Organager is a personal productivity and task management application designed to
 - Expo
  
 ## Status
- 
+
 Beta testing.
 
 The application is currently in active use and undergoing continuous refinement based on day-to-day usage, feedback and feature validation.
